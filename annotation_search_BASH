@@ -1,0 +1,31 @@
+```
+# this is the initial completed bash script that we worked on to pull gene names from the possum genome based off the human genome annotations 
+## take note that I am using specific versions of the human reference genome and the possum genome 
+
+no_mito_genes=`wc -l mito_genes.txt | awk '{ print $1 }'`
+
+for mito_line in `seq 2 1 $no_mito_genes`;
+      do gene_search_term=`head -n $mito_line mito_genes.txt | tail -n 1 | cut -f 4`;
+      grep "ID=gene-"$gene_search_term";" /nesi/nobackup/uoo03398/michael/possum_genome_master/GCF_011100635.1_mTriVul1.pri_genomic.gff | grep $'\t'gene$'\t' > temp;
+      alt_search_terms=`head -n $mito_line mito_genes.txt | tail -n 1 | cut -f 5`;
+      no_alts=`echo $alt_search_terms | grep -o ";" | wc -l`;
+                for alt_gene in `seq 1 1 $no_alts`;
+                        do alt_gene_name=`echo $alt_search_terms | cut -d ";" -f $alt_gene | sed 's/ //g'`;
+                        grep "ID=gene-"$alt_gene_name";" /nesi/nobackup/uoo03398/michael/possum_genome_master/GCF_011100635.1_mTriVul1.pri_genomic.gff | grep $'\t'gene$'\t' >> temp;
+                done;
+        cat temp | sort | uniq > temp_all_searches;
+        if [ `wc -l temp_all_searches | awk '{ print $1 }'` -lt 1 ]
+                then product_name=`grep "gene="$gene_search_term";" GCF_000001405.39_GRCh38.p13_genomic.gff | grep $'\t'CDS$'\t' | head -n 1 | sed 's/.*;product=/;product=/g' | sed 's/;protein_id=$
+                grep "$product_name" /nesi/nobackup/uoo03398/michael/possum_genome_master/GCF_011100635.1_mTriVul1.pri_genomic.gff | grep ";Parent=gene-" | sed  's/.*;Parent=gene-//g' | sed 's/;.*//g' > temp_p$
+                no_product_matches=`wc -l temp_product_search | awk '{ print $1 }'`;
+                for product_match_line in `seq 1 1 $no_product_matches `;
+                        do product_match=`head -n $product_match_line temp_product_search | tail -n 1`;
+                        grep "ID=gene-"$product_match";" /nesi/nobackup/uoo03398/michael/possum_genome_master/GCF_011100635.1_mTriVul1.pri_genomic.gff | grep $'\t'gene$'\t' >> temp;
+                done
+                cat temp | sort | uniq > temp_all_searches;
+        fi
+	no_matches=`wc -l temp_all_searches | awk '{ print $1 }'`;
+        echo $gene_search_term $no_matches >> results_matches.txt;
+        sed "s/^/$gene_search_term\t/g" temp_all_searches >> gene_location_possum.txt;
+        rm temp*;
+done
