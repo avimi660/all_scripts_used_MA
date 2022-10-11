@@ -1,0 +1,444 @@
+# Then in R in same directory
+setwd("/Users/aleal62p/Dropbox (Otago University)/Michael/vcfs")
+
+# Load library
+library(tidyverse)
+
+# https://statsandr.com/blog/multiple-linear-regression-made-simple/#conditions-of-application-1
+
+# Reading in file
+clades <- read_table("sample_mtDNA_clades_renamed.txt",col_names=TRUE)
+combined_TAS_Vert <- read_table("combined_match_mismatch.txt",col_names=TRUE)
+
+# We want to have our observations in rows, and our data in columns
+transposed_sites <- combined_TAS_Vert %>% select(-Sandyspleen) %>% select(-c(`#CHROM`:FORMAT)) %>% 
+  select(-c(Match:num_refs)) %>% t()
+
+transposed_sites_het_match <- as_tibble(gsub("Mismatch",1,gsub("Het",0,gsub("Match",0,transposed_sites))))
+transposed_sites_het_match <- transposed_sites_het_match %>% mutate_all(as.numeric)
+
+transposed_sites_het_match <- as_tibble(cbind(transposed_sites_het_match,rowMeans(transposed_sites_het_match,na.rm=TRUE)))
+names(transposed_sites_het_match)[dim(transposed_sites_het_match)[2]] <- "prop_mismatch"
+names(transposed_sites_het_match)[1:(dim(transposed_sites_het_match)[2]-1)] <- (combined_TAS_Vert %>% mutate(SNP_name=paste(`#CHROM`,POS,sep="_")) %>% select(SNP_name) %>% as.matrix())[,1]
+
+transposed_sites_het_match <- cbind((combined_TAS_Vert %>% select(c(-`#CHROM`:-FORMAT))  %>% select(-Sandyspleen)  %>% select(c(-Match:-num_refs)) %>% names()),transposed_sites_het_match)
+transposed_sites_het_match <- as_tibble(transposed_sites_het_match)
+names(transposed_sites_het_match)[1] <- "sample_id"
+
+mtDNA_clade <- NULL
+for (i in names(combined_TAS_Vert)[c(10:32,34:77)]) {
+  mtDNA_clade <- c(mtDNA_clade,clades$mtDNA_clade[which(clades$ID==i)])
+}
+
+# Blue as 0, Green as 1
+mtDNA_clade <- gsub("Green_TAS",1,gsub("Blue_NSW",0,mtDNA_clade))
+mtDNA_clade <- as.numeric(mtDNA_clade)
+transposed_sites_het_match <- as_tibble(cbind(transposed_sites_het_match,mtDNA_clade))
+
+# Reading in normalized_counts_mit.txt
+expression_data <- read_tsv("normalized_counts_mit.txt",col_names=TRUE)
+
+# Ditch samples not included in the LM
+expression_data <- expression_data %>% select(-Sandy_bladder_sorted.bam, -Sandy_brain_sorted.bam, -Sandy_eye_sorted.bam, -Sandy_heart_sorted.bam, -Sandy_kidney_sorted.bam, 
+-Sandy_large_int_sorted.bam, -Sandy_lung_sorted.bam, -Sandy_muscle_sorted.bam, -Sandy_skin_sorted.bam, -Sandy_small_int_sorted.bam, 
+-Sandy_spleen_sorted.bam, -Sandy_stomach_sorted.bam, -Sheila_tongue_sorted.bam, -SRR3901715__sorted.bam, -SRR8658969__sorted.bam,        
+-Vert35.R_sorted.bam, -Vert36.R_sorted.bam, -Vert37.R_sorted.bam, -Vert38.R_sorted.bam, -Vert39.R_sorted.bam, -Vert40.R_sorted.bam, -Vert41.R_sorted.bam)
+
+expression_data <- expression_data %>% select(-Puku_tongue_sorted.bam,-L1_sorted.bam,-L2_sorted.bam,-L3_sorted.bam,-L4_sorted.bam)
+names(expression_data) <- gsub("_sorted.bam","",gsub("batch_2_","",names(expression_data)))
+
+# Look at names that need renaming
+names(expression_data) <- gsub("-","",gsub("S[0-9][0-9]_","",names(expression_data)))
+names(expression_data) <- gsub("_","",gsub("\\.","",names(expression_data)))
+
+names(expression_data)[!(names(expression_data) %in% transposed_sites_het_match$sample_id)]
+
+transposed_sites_het_match %>% arrange(sample_id) %>% select(sample_id) %>% c()
+
+expression_data <- expression_data %>% select(-`070521PY01`,-`11721MRJohn`,-`12621BH001`,-`140421PY02`,-`150121PY01`,-`19820MBSDR1`,
+                           -`20421MBSDR1`,-`22920FGPYRAVB1`,-`3920MBSDR1`,-`16620MGSDR1`)
+
+names(expression_data)[1] <- "gene_name"
+
+expression_data_sample_names <- names(expression_data)[-1]
+expression_data_gene_names <- expression_data$gene_name
+expression_data <- as_tibble(cbind(expression_data_sample_names,t(expression_data[,-1])))
+expression_data <- expression_data %>% mutate_at(c('V2','V3','V4','V5','V6','V7','V8','V9','V10',
+                                'V11','V12','V13','V14','V15','V16','V17','V18','V19','V20',
+                                'V21','V22','V23','V24','V25','V26','V27','V28','V29','V30',
+                                'V31','V32','V33','V34','V35','V36','V37','V38'), as.numeric)
+
+names(expression_data) <- c("sample_id",expression_data_gene_names)
+
+# Bind expression data to explanatory variables
+transposed_sites_het_match <- full_join(transposed_sites_het_match,expression_data)
+
+# Finding correlations among SNPs and removing these when they exceed 0.75
+correlations_to_check <- NULL
+temp_names <- names(transposed_sites_het_match)
+for (i in 2:(dim(transposed_sites_het_match)[2]-40)) {
+  for (j in (i+1):(dim(transposed_sites_het_match)[2]-39)) {
+    temp_cols <- cbind(transposed_sites_het_match[,i],transposed_sites_het_match[,j])
+    temp_cols <- temp_cols[(which(complete.cases(temp_cols))),]
+    if (abs(cor(temp_cols)[2,1])>=0.75) {
+      correlations_to_check <- rbind(correlations_to_check,
+                                     c(names(transposed_sites_het_match)[i],names(transposed_sites_het_match)[j],cor(temp_cols)[2,1],na.rm=TRUE))
+    }
+  }
+}
+
+correlated_SNPs <- correlations_to_check
+filtered_transposed_sites_het_match <- transposed_sites_het_match %>% select(-UQ(unique(correlations_to_check[,2])))
+
+# Double-checking for correlations including prop_mismatch and mtDNA clade
+correlations_to_check <- NULL
+temp_names <- names(filtered_transposed_sites_het_match)
+for (i in 2:(dim(filtered_transposed_sites_het_match)[2]-38)) {
+  for (j in (i+1):(dim(filtered_transposed_sites_het_match)[2]-37)) {
+    temp_cols <- cbind(filtered_transposed_sites_het_match[,i],filtered_transposed_sites_het_match[,j])
+    temp_cols <- temp_cols[(which(complete.cases(temp_cols))),]
+    if (abs(cor(temp_cols)[2,1])>=0.75) {
+      correlations_to_check <- rbind(correlations_to_check,
+                                     c(names(filtered_transposed_sites_het_match)[i],names(filtered_transposed_sites_het_match)[j],cor(temp_cols)[2,1],na.rm=TRUE))
+    }
+  }
+}
+
+correlations_to_check
+#na.rm 
+#[1,] "chr1_39740879" "mtDNA_clade" "0.751974488881801" "TRUE"
+#[2,] "prop_mismatch" "mtDNA_clade" "-0.98062018202605" "TRUE"
+
+filtered_transposed_sites_het_match <- filtered_transposed_sites_het_match %>% select(-chr1_39740879,-prop_mismatch)
+
+###########################################################################################################
+sig_thres <- 0.1/(dim(filtered_transposed_sites_het_match)[2]-1)
+###########################################################################################################
+# ND1
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_ND1 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`rna-chrM:2650..2723`) %>% 
+  select(-`rna-chrM:3681..3749`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_ND1)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_ND1 %>% filter(.[i]==0) %>% select(`gene-ND1`)),
+  as.matrix(gene_ND1 %>% filter(.[i]==1) %>% select(`gene-ND1`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_ND1)[i],
+                                 (mean(as.matrix(gene_ND1 %>% filter(.[i]==0) %>% select(`gene-ND1`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_ND1 %>% filter(.[i]==1) %>% select(`gene-ND1`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+# NULL at 0.05threshold 
+# NULL at 0.075 threshold
+# NULL at 0.1
+
+########################################################################################################################
+# ND2
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_ND2 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`rna-chrM:3817..3885`) %>% 
+  select(-`rna-chrM:4931..4999`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_ND2)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_ND2 %>% filter(.[i]==0) %>% select(`gene-ND2`)),
+                         as.matrix(gene_ND2 %>% filter(.[i]==1) %>% select(`gene-ND2`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_ND2)[i],
+                                 (mean(as.matrix(gene_ND2 %>% filter(.[i]==0) %>% select(`gene-ND2`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_ND2 %>% filter(.[i]==1) %>% select(`gene-ND2`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+#NULL at 00.05
+# null at 0.075
+# NULL at 0.1
+#######################################################################
+# COX1
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_COX1 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`rna-chrM:5297..5364`) %>% 
+  select(-`rna-chrM:6911..6979`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_COX1)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_COX1 %>% filter(.[i]==0) %>% select(`gene-COX1`)),
+                         as.matrix(gene_COX1 %>% filter(.[i]==1) %>% select(`gene-COX1`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_COX1)[i],
+                                 (mean(as.matrix(gene_COX1 %>% filter(.[i]==0) %>% select(`gene-COX1`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_COX1 %>% filter(.[i]==1) %>% select(`gene-COX1`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+sig_cols
+sig_COX1 <- sig_cols
+
+# at 0.05
+#"chr4_290912178" "469067.304891895" "271890.417063015" "4.14901246972725e-05"
+#NC_050576.1 Gnomon gene 290911938 291095482 . - . ID=gene-CPS1;Dbxref=GeneID:118847442;Name=CPS1;gbkey=Gene;gene=CPS1;gene_biotype=protein_coding
+
+# at 0.1
+# "chr1_193841171" "502398.248099272" "318812.955122349" "0.000253977063071634"
+# ALDH5A1
+# chr 4 snp
+ggplot() + geom_boxplot(data=gene_COX1,
+                        mapping=aes(x=as.factor(chr4_290912178),y=`gene-COX1`)) +
+  geom_point(data=gene_COX1,
+             mapping=aes(x=as.factor(chr4_290912178),
+                         y=`gene-COX1`,color=as.factor(mtDNA_clade)))
+# chr 1 SNP
+ggplot() + geom_boxplot(data=gene_COX1,
+                        mapping=aes(x=as.factor(chr1_193841171),y=`gene-COX1`)) +
+  geom_point(data=gene_COX1,
+             mapping=aes(x=as.factor(chr1_193841171),
+                         y=`gene-COX1`,color=as.factor(mtDNA_clade)))
+
+# No other correlated SNPs with this one
+"chr4_290912178" %in% correlations_to_check[,1:2]
+"chr4_290912178" %in% correlated_SNPs[,1:2]
+
+# No other correlated SNPs with this one
+"chr1_193841171" %in% correlations_to_check[,1:2]
+"chr1_193841171" %in% correlated_SNPs[,1:2]
+
+
+# same SNP significant at 0.05 and 0.075 no additional ones
+# NEW SNP at 0.1 threshold
+
+#######################################################################
+# COX2
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_COX2 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`rna-chrM:6982..7051`) %>% 
+  select(-`rna-chrM:7735..7795`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_COX2)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_COX2 %>% filter(.[i]==0) %>% select(`gene-COX2`)),
+                         as.matrix(gene_COX2 %>% filter(.[i]==1) %>% select(`gene-COX2`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_COX2)[i],
+                                 (mean(as.matrix(gene_COX2 %>% filter(.[i]==0) %>% select(`gene-COX2`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_COX2 %>% filter(.[i]==1) %>% select(`gene-COX2`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+sig_COX2 <- sig_cols
+"chr4_290912178" "105916.947871648" "71963.9776978498" "7.84925078390093e-05"
+
+# Same SNP as is significantly correlated with COX1 too
+# same SNP at 0.05 and 0.075 and 0.1.
+ggplot() + geom_boxplot(data=gene_COX2,
+                        mapping=aes(x=as.factor(chr4_290912178),y=`gene-COX2`)) +
+  geom_point(data=gene_COX2,
+             mapping=aes(x=as.factor(chr4_290912178),
+                         y=`gene-COX2`,color=as.factor(mtDNA_clade)))
+
+# No other correlated SNPs with this one
+"chr4_290912178" %in% correlations_to_check[,1:2]
+"chr4_290912178" %in% correlated_SNPs[,1:2]
+
+#######################################################################
+# ATP8
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_ATP8 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`rna-chrM:7735..7795`) %>% 
+  select(-`gene-ATP6`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_ATP8)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_ATP8 %>% filter(.[i]==0) %>% select(`gene-ATP8`)),
+                         as.matrix(gene_ATP8 %>% filter(.[i]==1) %>% select(`gene-ATP8`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_ATP8)[i],
+                                 (mean(as.matrix(gene_ATP8 %>% filter(.[i]==0) %>% select(`gene-ATP8`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_ATP8 %>% filter(.[i]==1) %>% select(`gene-ATP8`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+# NULL @ both 0.05 and 0.075 and 0.1
+
+#######################################################################
+# ATP6
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_ATP6 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`gene-ATP8`) %>% 
+  select(-`gene-COX3`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_ATP6)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_ATP6 %>% filter(.[i]==0) %>% select(`gene-ATP6`)),
+                         as.matrix(gene_ATP6 %>% filter(.[i]==1) %>% select(`gene-ATP6`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_ATP6)[i],
+                                 (mean(as.matrix(gene_ATP6 %>% filter(.[i]==0) %>% select(`gene-ATP6`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_ATP6 %>% filter(.[i]==1) %>% select(`gene-ATP6`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_ATP6 <- sig_cols
+#NULL @ 0.05 and 0.075
+# found SNP at 0.1 threshold 
+# [1,] "chr9_147307346" "173266.582807457" "110065.64726273" "0.000299828335945985"
+
+# correlations to check was false but SNP is correlated to another SNP ### come back
+"chr9_147307346" %in% correlations_to_check[,1:2]
+"chr9_147307346" %in% correlated_SNPs[,1:2]
+correlated_SNPs[(which(correlated_SNPs[,1:2]=="chr9_147307346")),]
+
+# "chr9_147307346"    "chr9_147313922" "0.826393870541337"              "TRUE"
+# ALDH1L1 same gene for both SNPs 
+#######################################################################
+# COX3
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_COX3 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`gene-ATP8`) %>% 
+  select(-`rna-chrM:9424..9491`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_COX3)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_COX3 %>% filter(.[i]==0) %>% select(`gene-COX3`)),
+                         as.matrix(gene_COX3 %>% filter(.[i]==1) %>% select(`gene-COX3`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_COX3)[i],
+                                 (mean(as.matrix(gene_COX3 %>% filter(.[i]==0) %>% select(`gene-COX3`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_COX3 %>% filter(.[i]==1) %>% select(`gene-COX3`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+#NULL @ 0.05 nd 0.075 and 0.1
+
+#######################################################################
+# ND3
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_ND3 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`rna-chrM:9424..9491`) %>% 
+  select(-`rna-chrM:9838..9906`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_ND3)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_ND3 %>% filter(.[i]==0) %>% select(`gene-ND3`)),
+                         as.matrix(gene_ND3 %>% filter(.[i]==1) %>% select(`gene-ND3`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_ND3)[i],
+                                 (mean(as.matrix(gene_ND3 %>% filter(.[i]==0) %>% select(`gene-ND3`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_ND3 %>% filter(.[i]==1) %>% select(`gene-ND3`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+#NULL at 0.05 and 0.075 and 0.1
+
+#######################################################################
+# ND4L
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_ND4L <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`rna-chrM:9838..9906`) %>% 
+  select(-`gene-ND4`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_ND4L)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_ND4L %>% filter(.[i]==0) %>% select(`gene-ND4L`)),
+                         as.matrix(gene_ND4L %>% filter(.[i]==1) %>% select(`gene-ND4L`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_ND4L)[i],
+                                 (mean(as.matrix(gene_ND4L %>% filter(.[i]==0) %>% select(`gene-ND4L`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_ND4L %>% filter(.[i]==1) %>% select(`gene-ND4L`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+#NULL at 0.05 and 0.075 and 0.1
+
+
+#######################################################################
+# ND4
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_ND4 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`gene-ND4L`) %>% 
+  select(-`rna-chrM:11575..11643`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_ND4)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_ND4 %>% filter(.[i]==0) %>% select(`gene-ND4`)),
+                         as.matrix(gene_ND4 %>% filter(.[i]==1) %>% select(`gene-ND4`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_ND4)[i],
+                                 (mean(as.matrix(gene_ND4 %>% filter(.[i]==0) %>% select(`gene-ND4`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_ND4 %>% filter(.[i]==1) %>% select(`gene-ND4`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+#NULL at 0.05 and 0.075 and 0.1
+
+#######################################################################
+# ND5
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_ND5 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`rna-chrM:11702..11772`) %>% 
+  select(-`gene-ND6`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_ND5)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_ND5 %>% filter(.[i]==0) %>% select(`gene-ND5`)),
+                         as.matrix(gene_ND5 %>% filter(.[i]==1) %>% select(`gene-ND5`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_ND5)[i],
+                                 (mean(as.matrix(gene_ND5 %>% filter(.[i]==0) %>% select(`gene-ND5`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_ND5 %>% filter(.[i]==1) %>% select(`gene-ND5`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+#NULL at 0.05 and 0.075 ad 0.1
+
+#######################################################################
+# ND6
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_ND6 <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`gene-ND5`) %>% 
+  select(-`rna-chrM:14082..14150`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_ND6)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_ND6 %>% filter(.[i]==0) %>% select(`gene-ND6`)),
+                         as.matrix(gene_ND6 %>% filter(.[i]==1) %>% select(`gene-ND6`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_ND6)[i],
+                                 (mean(as.matrix(gene_ND6 %>% filter(.[i]==0) %>% select(`gene-ND6`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_ND6 %>% filter(.[i]==1) %>% select(`gene-ND6`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+#NULL at 0.05 and 0.075 and 0.1
+
+#######################################################################
+# CYTB
+# Evaluating which SNPs are likely to be influential in explaining expression data
+gene_CYTB <- filtered_transposed_sites_het_match %>% select(-`rna-chrM:1..69`:-`rna-chrM:14082..14150`) %>% 
+  select(-`rna-chrM:15299..15366`:-`rna-chrM:15369..15436`)
+
+sig_cols <- NULL
+for (i in 2:(dim(gene_CYTB)[2]-2)) {
+  ttest_values <- t.test(as.matrix(gene_CYTB %>% filter(.[i]==0) %>% select(`gene-CYTB`)),
+                         as.matrix(gene_CYTB %>% filter(.[i]==1) %>% select(`gene-CYTB`)))
+  if (ttest_values$p.value <= sig_thres) {
+    sig_cols <- rbind(sig_cols,c(names(gene_CYTB)[i],
+                                 (mean(as.matrix(gene_CYTB %>% filter(.[i]==0) %>% select(`gene-CYTB`)),na.rm=TRUE)),
+                                 (mean(as.matrix(gene_CYTB %>% filter(.[i]==1) %>% select(`gene-CYTB`)),na.rm=TRUE)),
+                                 ttest_values$p.value))
+  }
+}
+
+sig_cols
+#NULL 0.05 and 0.075 and 0.1
