@@ -1,0 +1,654 @@
+# Copy vcf to somewhere in a path without spaces
+# In bash
+#filename=Q30DP10mis95_mit.recode.vcf
+
+#grep "##" $filename > header_row.txt;
+#headerlineno=`wc -l header_row.txt | awk '{print $1}'`;
+#headerlineno=$((headerlineno+1))
+#tail -n +$headerlineno $filename > temp;
+
+# Then in R in same directory
+setwd("/Users/aleal62p/Dropbox (Otago University)/Michael/vcfs")
+
+# Load library
+library(tidyverse)
+library(rstatix)
+library(GGally)
+# install.packages("matrixStats")
+library(matrixStats)
+
+# Reading in file
+temp <- read_tsv("temp",col_names=TRUE)
+clades <- read_tsv("sample_mtDNA_clades.txt",col_names=TRUE)
+
+# Ensuring names match up between vcf and clades
+names(temp)[c(-1:-9)] <- gsub("-","",gsub("\\.","",gsub("_","",gsub("batch_2_","",names(temp)[c(-1:-9)]))))
+clades$ID <- gsub(" ","",(gsub("\\)","",(gsub("\\(","",gsub("-","",gsub("\\.","",gsub("_","",gsub("batch_2_","",clades$ID)))))))))
+
+# This shows that there are some trailing "Rs" for the Verts in the vcf
+clades$ID[which(!(clades$ID %in% names(temp)[c(-1:-9)]))]
+col_index <- which(grepl("Vert",names(temp)))
+names(temp)[col_index] <- gsub("R","",names(temp)[col_index])
+
+# Renaming Takashi
+names(temp)[which(names(temp)=="FukurogitsunecleanR")] <- "Takashi"
+
+# Some have a S[0-9][0-9] in front of their code
+clades$ID[which(!(clades$ID %in% gsub("S[0-9][0-9]","",names(temp))))]
+names(temp) <- gsub("S[0-9][0-9]","",names(temp))
+
+# Also need to filter out a mitogenome sequence from clades that is not RNAseq
+clades <- clades %>% filter(ID!="NC003039")
+
+# Need to add entry for Sandy being duplicated
+clades %>% filter(ID=="Sandyliver")
+clades <- rbind(clades,c("Sandyspleen","RNA_Sandy_spleen", "Blue_NSW"))
+
+# Final double check 
+clades$ID[which(!(clades$ID %in% names(temp)[c(-1:-9)]))]
+names(temp)[which(!(names(temp) %in% clades$ID))]
+
+# Reference definitions
+TAS <- "Takashi"
+NSW <- c("Vert35","Vert36","Vert37","Vert38","Vert39","Vert40","Vert41")
+KAN <- "SRR3901715"
+
+# Total number of samples
+(dim(temp)[2]-9)
+# Total number of SNPs
+dim(temp)[1]
+
+# Minimum mean depth	Max missing	Total	Mitochondrial genes	Proportion	      Name
+# 10    	            5,00%	      38875	7864	              20,2289389067524	Q30DP10mis95_mit.recode.vcf
+
+# For testing out function
+#refsample1 <- "Takashi"
+#refsample2 <- "Vert35"
+
+# Filter out SNPs that are found on the mitogenome
+temp <- temp %>% filter(`#CHROM`!="chrM")
+
+# Looking at location1 vs location2
+refsample1_refsample2_comparison <- function(refsample1,refsample2) {
+  
+  output <- matrix(NA, ncol=(dim(temp)[2]-9), nrow=dim(temp)[1])
+  
+  for (i in 1:dim(temp)[1]) {
+    refsample1_genotype <- gsub("\\|","/",gsub(":.*","",temp[i,which(names(temp)==refsample1)]))
+    refsample2_genotype <- gsub("\\|","/",gsub(":.*","",temp[i,which(names(temp)==refsample2)]))
+    if (refsample1_genotype==refsample2_genotype) {
+      # If the genotypes are the same (no resolution)
+      output[i,] <- "No_Res"
+    } else {
+      if (all(c(refsample1_genotype,refsample2_genotype) %in% c("0/0", "1/1"))) {
+        # If both references are not hets 
+        output[i,(which(gsub("\\|","/",gsub(":.*","",temp[i,]))==refsample1_genotype))-9] <- "ref1"
+        output[i,(which(gsub("\\|","/",gsub(":.*","",temp[i,]))==refsample2_genotype))-9] <- "ref2"
+        output[i,(which(gsub("\\|","/",gsub(":.*","",temp[i,]))=="0/1"))-9] <- "Het"
+      } else { 
+        output[i,] <- "No_Res"
+      }
+    }
+  }    
+  
+  categories <- names(table(output))
+  
+  sum_output <- matrix(NA,ncol=length(categories),nrow=dim(output)[2])
+  
+  for (i in 1:dim(output)[2]) {
+    for (k in categories) {
+      sum_output[i,which(categories==k)] <- sum(output[,i]==k, na.rm=TRUE)
+    }
+  }
+  
+  sum_output <- cbind((names(temp)[10:dim(temp)[2]]),sum_output)
+  
+  sum_output <- as_tibble(sum_output)
+  names(sum_output) <- c("samples",categories)
+  sum_output <- sum_output %>% mutate_at(c('Het','No_Res','ref1','ref2'),as.numeric)
+  sum_output <- sum_output %>% mutate(Location=ifelse(samples %in% c("Vert35","Vert36","Vert37","Vert38","Vert39","Vert40","Vert41"),"NSW",
+                                                      ifelse(samples=="Takashi","TAS",ifelse(samples=="SRR3901715","KAN",
+                                                                                             ifelse(samples %in% c("SRR8658969","L1","L2","L3","L4"),"NZ",
+                                                                                                    ifelse(samples %in% c("Pukuliver","Sandyliver","Sandyspleen","Sheilaliver"),"SAN","OTA"))))))
+  
+  ref1_ref2_contrast <- sum_output %>% mutate(Total=Het+ref1+ref2,Het=Het/Total,ref1=ref1/Total,ref2=ref2/Total) %>% select(-No_Res)
+  
+  # Combining ref1_ref2_contrast with the mtDNA clade information
+  ref1_ref2_contrast <- full_join(ref1_ref2_contrast,clades,by=c("samples" = "ID"))
+  
+  # T.test on Heterozygosity and ref1 proportion, and plotting of these values
+  print("t-test on heterozygosity")
+  ttest_het <- ref1_ref2_contrast %>% 
+    filter(!(samples %in% c(refsample1,refsample2)))  %>%  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+    filter(Location=="OTA") %>% t_test(Het ~ mtDNA_clade, var.equal = T) %>%  print()
+  
+  mean_hets <- ref1_ref2_contrast %>% 
+    filter(!(samples %in% c(refsample1,refsample2)))  %>%  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+    filter(Location=="OTA") %>% group_by(mtDNA_clade) %>% summarise(mean(Het, na.rm=TRUE)) %>% print()
+  
+  print("t-test on ref1 genomic proportion")
+  ttest_ref1_prop <-  ref1_ref2_contrast %>% 
+    filter(!(samples %in% c(refsample1,refsample2)))  %>%  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+    filter(Location=="OTA") %>% t_test(ref1 ~ mtDNA_clade, var.equal = T) %>%  print()
+  
+  mean_ref1_prop <- ref1_ref2_contrast %>% 
+    filter(!(samples %in% c(refsample1,refsample2)))  %>%  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+    filter(Location=="OTA") %>% group_by(mtDNA_clade) %>% summarise(mean(ref1)) %>% print()
+  
+  print("t-test on ref2 genomic proportion")
+  ttest_ref2_prop <-  ref1_ref2_contrast %>% 
+    filter(!(samples %in% c(refsample1,refsample2)))  %>%  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+    filter(Location=="OTA") %>% t_test(ref2 ~ mtDNA_clade, var.equal = T) %>%  print()
+  
+  mean_ref2_prop <- ref1_ref2_contrast %>% 
+    filter(!(samples %in% c(refsample1,refsample2)))  %>%  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+    filter(Location=="OTA") %>% group_by(mtDNA_clade) %>% summarise(mean(ref2)) %>% print()
+  
+  het_plot <- ggplot(ref1_ref2_contrast %>% filter(!(samples %in% c(refsample1,refsample2))) %>% 
+                       mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>% 
+                       filter(Location=="OTA")) + 
+    geom_boxplot(mapping=aes(x=mtDNA_clade, y=Het)) +
+    geom_jitter(mapping=aes(x=mtDNA_clade, y=Het), fill="white",shape=21, position=position_jitter(0.2),size=1) +
+    xlab("mtDNA clade") +
+    ylab("Proportion of heterozygous SNP sites") +
+    theme_bw(base_size = 10) +
+    theme(legend.position="none",panel.border=element_rect(fill = NA)) +  
+    theme(axis.title=element_text(size=14,face="bold")) +
+    theme(
+      strip.background = element_blank(),
+      strip.text.x = element_blank()
+    )
+  
+  ref1_plot <- ggplot(ref1_ref2_contrast %>% filter(!(samples %in% c(refsample1,refsample2))) %>% 
+                        mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>% 
+                        filter(Location=="OTA")) + 
+    geom_boxplot(mapping=aes(x=mtDNA_clade, y=ref1)) +
+    geom_jitter(mapping=aes(x=mtDNA_clade, y=ref1), fill="white",shape=21, position=position_jitter(0.2),size=1) +
+    xlab("mtDNA clade") +
+    ylab("Prop. of SNPs matching Reference 1") +
+    theme_bw(base_size = 10) +
+    theme(legend.position="none",panel.border=element_rect(fill = NA)) +  
+    theme(axis.title=element_text(size=14,face="bold")) +
+    theme(
+      strip.background = element_blank(),
+      strip.text.x = element_blank()
+    )
+  
+  ref2_plot <- ggplot(ref1_ref2_contrast %>% filter(!(samples %in% c(refsample1,refsample2))) %>% 
+                        mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>% 
+                        filter(Location=="OTA")) + 
+    geom_boxplot(mapping=aes(x=mtDNA_clade, y=ref2)) +
+    geom_jitter(mapping=aes(x=mtDNA_clade, y=ref2), fill="white",shape=21, position=position_jitter(0.2),size=1) +
+    xlab("mtDNA clade") +
+    ylab("Prop. of SNPs matching Reference 2") +
+    theme_bw(base_size = 10) +
+    theme(legend.position="none",panel.border=element_rect(fill = NA)) +  
+    theme(axis.title=element_text(size=14,face="bold")) +
+    theme(
+      strip.background = element_blank(),
+      strip.text.x = element_blank()
+    )
+  
+  results <- list(ref1_ref2_contrast, ttest_het, mean_hets, ttest_ref1_prop, mean_ref1_prop, ttest_ref2_prop, mean_ref2_prop, het_plot, ref1_plot, ref2_plot)
+  
+  names(results) <- c("data", "ttest_het", "mean_hets", "ttest_ref1_prop", "mean_ref1_prop","ttest_ref2_prop", "mean_ref2_prop", "het_plot", "ref1_plot","ref2_plot")
+  
+  return(results)
+  
+}
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+##TAS vs NSW
+##TAS 35
+Tas_Vert35 <- refsample1_refsample2_comparison("Takashi","Vert35")
+Tas_Vert35$het_plot
+ggsave(filename=paste("Tas_Vert35_het.pdf",sep=""),plot = Tas_Vert35$het_plot, width=9,height=12,units="cm")
+Tas_Vert35$ref1_plot
+ggsave(filename=paste("Tas_Vert35_ref1.pdf",sep=""),plot = Tas_Vert35$ref1_plot, width=12,height=9,units="cm")
+Tas_Vert35$ref2_plot
+ggsave(filename=paste("Tas_Vert35_ref2.pdf",sep=""),plot = Tas_Vert35$ref2_plot, width=12,height=9,units="cm")
+# Not significant
+
+#TAS 36
+Tas_Vert36 <- refsample1_refsample2_comparison("Takashi","Vert36")
+Tas_Vert36$het_plot
+ggsave(filename=paste("Tas_Vert36_het.pdf",sep=""),plot = Tas_Vert36$het_plot, width=9,height=12,units="cm")
+Tas_Vert36$ref1_plot
+ggsave(filename=paste("Tas_Vert36_ref1.pdf",sep=""),plot = Tas_Vert36$ref1_plot, width=12,height=9,units="cm")
+Tas_Vert36$ref2_plot
+ggsave(filename=paste("Tas_Vert36_ref2.pdf",sep=""),plot = Tas_Vert36$ref2_plot, width=12,height=9,units="cm")
+## Not significant ##
+
+#TAS37
+Tas_Vert37 <- refsample1_refsample2_comparison("Takashi","Vert37")
+Tas_Vert37$het_plot
+ggsave(filename=paste("Tas_Vert37_het.pdf",sep=""),plot = Tas_Vert37$het_plot, width=9,height=12,units="cm")
+Tas_Vert37$ref1_plot
+ggsave(filename=paste("Tas_Vert37_ref1.pdf",sep=""),plot = Tas_Vert37$ref1_plot, width=12,height=9,units="cm")
+Tas_Vert37$ref2_plot
+ggsave(filename=paste("Tas_Vert37_ref2.pdf",sep=""),plot = Tas_Vert37$ref2_plot, width=12,height=9,units="cm")
+## Not significant ##
+
+#TAS 38
+Tas_Vert38 <- refsample1_refsample2_comparison("Takashi","Vert38")
+Tas_Vert38$het_plot
+ggsave(filename=paste("Tas_Vert38_het.pdf",sep=""),plot = Tas_Vert38$het_plot, width=9,height=12,units="cm")
+Tas_Vert38$ref1_plot
+ggsave(filename=paste("Tas_Vert38_ref1.pdf",sep=""),plot = Tas_Vert38$ref1_plot, width=12,height=9,units="cm")
+Tas_Vert38$ref2_plot
+ggsave(filename=paste("Tas_Vert38_ref2.pdf",sep=""),plot = Tas_Vert38$ref2_plot, width=12,height=9,units="cm")
+## Not significant ##
+
+#TAS 39
+Tas_Vert39 <- refsample1_refsample2_comparison("Takashi","Vert39")
+Tas_Vert39$het_plot
+ggsave(filename=paste("Tas_Vert39_het.pdf",sep=""),plot = Tas_Vert39$het_plot, width=9,height=12,units="cm")
+Tas_Vert39$ref1_plot
+ggsave(filename=paste("Tas_Vert39_ref1.pdf",sep=""),plot = Tas_Vert39$ref1_plot, width=12,height=9,units="cm")
+Tas_Vert39$ref2_plot
+ggsave(filename=paste("Tas_Vert39_ref2.pdf",sep=""),plot = Tas_Vert39$ref2_plot, width=12,height=9,units="cm")
+## Not significant ##
+
+#TAS 40
+Tas_Vert40 <- refsample1_refsample2_comparison("Takashi","Vert40")
+Tas_Vert40$het_plot
+ggsave(filename=paste("Tas_Vert40_het.pdf",sep=""),plot = Tas_Vert40$het_plot, width=9,height=12,units="cm")
+Tas_Vert40$ref1_plot
+ggsave(filename=paste("Tas_Vert40_ref1.pdf",sep=""),plot = Tas_Vert40$ref1_plot, width=12,height=9,units="cm")
+Tas_Vert40$ref2_plot
+ggsave(filename=paste("Tas_Vert40_ref2.pdf",sep=""),plot = Tas_Vert40$ref2_plot, width=12,height=9,units="cm")
+## Not significant ##
+
+#TAS 41
+Tas_Vert41 <- refsample1_refsample2_comparison("Takashi","Vert41")
+Tas_Vert41$het_plot
+ggsave(filename=paste("Tas_Vert41_het.pdf",sep=""),plot = Tas_Vert41$het_plot, width=9,height=12,units="cm")
+Tas_Vert41$ref1_plot
+ggsave(filename=paste("Tas_Vert41_ref1.pdf",sep=""),plot = Tas_Vert41$ref1_plot, width=12,height=9,units="cm")
+Tas_Vert41$ref2_plot
+ggsave(filename=paste("Tas_Vert41_ref2.pdf",sep=""),plot = Tas_Vert41$ref2_plot, width=12,height=9,units="cm")
+## Not significant ##
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+## KAN vs VERT
+
+Kan_Vert35 <- refsample1_refsample2_comparison("SRR3901715","Vert35")
+Kan_Vert35$het_plot
+ggsave(filename=paste("Kan_Vert35_het.pdf",sep=""),plot = Kan_Vert35$het_plot, width=9,height=12,units="cm")
+Kan_Vert35$ref1_plot
+ggsave(filename=paste("Kan_Vert35_ref1.pdf",sep=""),plot = Kan_Vert35$ref1_plot, width=12,height=9,units="cm")
+Kan_Vert35$ref2_plot
+ggsave(filename=paste("Kan_Vert35_ref2.pdf",sep=""),plot = Kan_Vert35$ref2_plot, width=12,height=9,units="cm")
+## non-significant
+
+##KAN - 36
+Kan_Vert36 <- refsample1_refsample2_comparison("SRR3901715","Vert36")
+Kan_Vert36$het_plot
+ggsave(filename=paste("Kan_Vert36_het.pdf",sep=""),plot = Kan_Vert36$het_plot, width=9,height=12,units="cm")
+Kan_Vert36$ref1_plot
+ggsave(filename=paste("Kan_Vert36_ref1.pdf",sep=""),plot = Kan_Vert36$ref1_plot, width=12,height=9,units="cm")
+Kan_Vert36$ref2_plot
+ggsave(filename=paste("Kan_Vert36_ref2.pdf",sep=""),plot = Kan_Vert36$ref2_plot, width=12,height=9,units="cm")
+## non-significant
+
+## KAN - 37
+Kan_Vert37 <- refsample1_refsample2_comparison("SRR3901715","Vert37")
+Kan_Vert37$het_plot
+ggsave(filename=paste("Kan_Vert37_het.pdf",sep=""),plot = Kan_Vert37$het_plot, width=9,height=12,units="cm")
+Kan_Vert37$ref1_plot
+ggsave(filename=paste("Kan_Vert37_ref1.pdf",sep=""),plot = Kan_Vert37$ref1_plot, width=12,height=9,units="cm")
+Kan_Vert37$ref2_plot
+ggsave(filename=paste("Kan_Vert37_ref2.pdf",sep=""),plot = Kan_Vert37$ref2_plot, width=12,height=9,units="cm")
+
+## KAN - 38
+Kan_Vert38 <- refsample1_refsample2_comparison("SRR3901715","Vert38")
+Kan_Vert38$het_plot
+ggsave(filename=paste("Kan_Vert38_het.pdf",sep=""),plot = Kan_Vert38$het_plot, width=9,height=12,units="cm")
+Kan_Vert38$ref1_plot
+ggsave(filename=paste("Kan_Vert38_ref1.pdf",sep=""),plot = Kan_Vert38$ref1_plot, width=12,height=9,units="cm")
+Kan_Vert38$ref2_plot
+ggsave(filename=paste("Kan_Vert38_ref2.pdf",sep=""),plot = Kan_Vert38$ref2_plot, width=12,height=9,units="cm")
+## Significant on ref1 comparison ##
+##$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$
+
+#.y.   group1    group2       n1    n2 statistic    df     p p.adj p.adj.signif
+#* <chr> <chr>     <chr>     <int> <int>     <dbl> <dbl> <dbl> <dbl> <chr>       
+#1 ref1  Blue_NSW  Green_TAS    25    43    -2.63     66 0.011 0.032 *           
+#2 ref1  Blue_NSW  Red_NA       25    10    -2.30     33 0.028 0.056 ns          
+#3 ref1  Green_TAS Red_NA       43    10    -0.102    51 0.919 0.919 ns 
+# A tibble: 3 × 2
+#mtDNA_clade `mean(ref1)`
+#<chr>              <dbl>
+#  1 Blue_NSW           0.236
+#2 Green_TAS          0.249
+#3 Red_NA             0.250
+##$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$###$$$
+
+## KAN - 39
+Kan_Vert39 <- refsample1_refsample2_comparison("SRR3901715","Vert39")
+Kan_Vert39$het_plot
+ggsave(filename=paste("Kan_Vert39_het.pdf",sep=""),plot = Kan_Vert39$het_plot, width=9,height=12,units="cm")
+Kan_Vert39$ref1_plot
+ggsave(filename=paste("Kan_Vert39_ref1.pdf",sep=""),plot = Kan_Vert39$ref1_plot, width=12,height=9,units="cm")
+Kan_Vert39$ref2_plot
+ggsave(filename=paste("Kan_Vert39_ref2.pdf",sep=""),plot = Kan_Vert39$ref2_plot, width=12,height=9,units="cm")
+## non-significant ##
+
+## KAN - 40
+Kan_Vert40 <- refsample1_refsample2_comparison("SRR3901715","Vert40")
+Kan_Vert40$het_plot
+ggsave(filename=paste("Kan_Vert40_het.pdf",sep=""),plot = Kan_Vert40$het_plot, width=9,height=12,units="cm")
+Kan_Vert40$ref1_plot
+ggsave(filename=paste("Kan_Vert40_ref1.pdf",sep=""),plot = Kan_Vert40$ref1_plot, width=12,height=9,units="cm")
+Kan_Vert40$ref2_plot
+ggsave(filename=paste("Kan_Vert40_ref2.pdf",sep=""),plot = Kan_Vert40$ref2_plot, width=12,height=9,units="cm")
+## non-significant ##
+
+## KAN - 41
+Kan_Vert41 <- refsample1_refsample2_comparison("SRR3901715","Vert41")
+Kan_Vert41$het_plot
+ggsave(filename=paste("Kan_Vert41_het.pdf",sep=""),plot = Kan_Vert41$het_plot, width=9,height=12,units="cm")
+Kan_Vert41$ref1_plot
+ggsave(filename=paste("Kan_Vert41_ref1.pdf",sep=""),plot = Kan_Vert41$ref1_plot, width=12,height=9,units="cm")
+Kan_Vert41$ref2_plot
+ggsave(filename=paste("Kan_Vert41_ref2.pdf",sep=""),plot = Kan_Vert41$ref2_plot, width=12,height=9,units="cm")
+## non-significant ##
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+## KAN vs TAS ##
+Kan_Tas <- refsample1_refsample2_comparison("SRR3901715","Takashi")
+Kan_Tas$het_plot
+ggsave(filename=paste("Kan_Tas_het.pdf",sep=""),plot = Kan_Tas$het_plot, width=9,height=12,units="cm")
+Kan_Tas$ref1_plot
+ggsave(filename=paste("Kan_Tas_ref1.pdf",sep=""),plot = Kan_Tas$ref1_plot, width=12,height=9,units="cm")
+Kan_Tas$ref2_plot
+ggsave(filename=paste("Kan_Tas_ref2.pdf",sep=""),plot = Kan_Tas$ref2_plot, width=12,height=9,units="cm")
+## non-significant ##
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+# Binding all of the different outputs together for Tas vs NSW
+all_data <- full_join((Tas_Vert35$data %>% mutate(Het=ifelse(samples %in% c(TAS,"Vert35"),NA,Het),
+                                                      ref1=ifelse(samples %in% c(TAS,"Vert35"),NA,ref1),
+                                                      ref2=ifelse(samples %in% c(TAS,"Vert35"),NA,ref2))),
+                      (Tas_Vert36$data %>% mutate(Het=ifelse(samples %in% c(TAS,"Vert36"),NA,Het),
+                                                  ref1=ifelse(samples %in% c(TAS,"Vert36"),NA,ref1),
+                                                  ref2=ifelse(samples %in% c(TAS,"Vert36"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Tas_Vert37$data %>% mutate(Het=ifelse(samples %in% c(TAS,"Vert37"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(TAS,"Vert37"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(TAS,"Vert37"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Tas_Vert38$data %>% mutate(Het=ifelse(samples %in% c(TAS,"Vert38"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(TAS,"Vert38"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(TAS,"Vert38"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Tas_Vert39$data %>% mutate(Het=ifelse(samples %in% c(TAS,"Vert39"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(TAS,"Vert39"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(TAS,"Vert39"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Tas_Vert40$data %>% mutate(Het=ifelse(samples %in% c(TAS,"Vert40"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(TAS,"Vert40"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(TAS,"Vert40"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Tas_Vert41$data %>% mutate(Het=ifelse(samples %in% c(TAS,"Vert41"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(TAS,"Vert41"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(TAS,"Vert41"),NA,ref2))),by="samples")
+
+# Double checking the influence of specific reference choice on resultant heterozygosity
+# Overall, pretty good consistency no matter what reference is used
+# Some outliers, so we'll redo some previous analyses taking the median across the
+# different estimates of heterozygosity
+ggpairs(all_data %>% select(starts_with("Het")))
+# When using "Vert37" & "Takashi" as references, Vert39 has really low heterozygosity 
+all_data %>% filter(Het.x.x<0.1) %>% t()
+
+# When using "Takashi" and "Vert38" as references, Vert40 has really low heterozygosity 
+all_data %>% filter(Het.y.y<0.1) %>% t()
+
+# When using "Takashi" and "Vert36" as references, Vert38 has really low heterozygosity 
+all_data %>% filter(Het.y.y.y<0.1) %>% t()
+
+# When using "Takashi" and "Vert35" as references, Vert37 has really low heterozygosity 
+all_data %>% filter(Het.x.x.x<0.1) %>% t()
+
+ggpairs(all_data %>% filter(!(samples %in% c("Vert37","Vert38","Vert39","Vert40"))) %>% select(starts_with("Het")))
+
+# Doing a similar thing for ref.1
+ggpairs(all_data %>% select(starts_with("ref1")))
+ggpairs(all_data %>% select(starts_with("ref2")))
+
+# Tas_NSW median dataset
+het_median <- rowMedians((all_data %>% select(starts_with("Het")) %>% as.matrix()),na.rm=TRUE)
+ref1_median <- rowMedians((all_data %>% select(starts_with("ref1")) %>% as.matrix()),na.rm=TRUE)
+ref2_median <- rowMedians((all_data %>% select(starts_with("ref2")) %>% as.matrix()),na.rm=TRUE)
+
+TAS_NSW_median <- cbind(all_data$samples, all_data$Location.x, all_data$mtDNA_clade.x, het_median,ref1_median, ref2_median)
+TAS_NSW_median <- gsub("NaN",NA,TAS_NSW_median)
+TAS_NSW_median <- as_tibble(TAS_NSW_median)
+names(TAS_NSW_median) <- c("samples","Location","mtDNA_clade","Het","ref1","ref2")
+TAS_NSW_median <- TAS_NSW_median %>% mutate_at(c('Het','ref1','ref2'),as.numeric)
+
+# T.test on Heterozygosity and ref1 proportion, and plotting of these values
+print("t-test on heterozygosity")
+ttest_het <- TAS_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% t_test(Het ~ mtDNA_clade, var.equal = T) %>%  print()
+
+mean_hets <- TAS_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% group_by(mtDNA_clade) %>% summarise(mean(Het, na.rm=TRUE)) %>% print()
+
+print("t-test on ref1 genomic proportion")
+ttest_ref1_prop <-  TAS_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% t_test(ref1 ~ mtDNA_clade, var.equal = T) %>%  print()
+
+mean_ref1_prop <- TAS_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% group_by(mtDNA_clade) %>% summarise(mean(ref1)) %>% print()
+
+print("t-test on ref2 genomic proportion")
+ttest_ref2_prop <-  TAS_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% t_test(ref2 ~ mtDNA_clade, var.equal = T) %>%  print()
+
+mean_ref2_prop <- TAS_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% group_by(mtDNA_clade) %>% summarise(mean(ref2)) %>% print()
+
+het_plot <- ggplot(TAS_NSW_median %>% 
+                     mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>% 
+                     filter(Location=="OTA")) + 
+  geom_boxplot(mapping=aes(x=mtDNA_clade, y=Het)) +
+  geom_jitter(mapping=aes(x=mtDNA_clade, y=Het), fill="white",shape=21, position=position_jitter(0.2),size=1) +
+  xlab("mtDNA clade") +
+  ylab("Proportion of heterozygous SNP sites") +
+  theme_bw(base_size = 10) +
+  theme(legend.position="none",panel.border=element_rect(fill = NA)) +  
+  theme(axis.title=element_text(size=14,face="bold")) +
+  theme(
+    strip.background = element_blank(),
+    strip.text.x = element_blank()
+  )
+
+ref1_plot <- ggplot(TAS_NSW_median  %>% 
+                      mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>% 
+                      filter(Location=="OTA")) + 
+  geom_boxplot(mapping=aes(x=mtDNA_clade, y=ref1)) +
+  geom_jitter(mapping=aes(x=mtDNA_clade, y=ref1), fill="white",shape=21, position=position_jitter(0.2),size=1) +
+  xlab("mtDNA clade") +
+  ylab("Prop. of SNPs matching Reference 1") +
+  theme_bw(base_size = 10) +
+  theme(legend.position="none",panel.border=element_rect(fill = NA)) +  
+  theme(axis.title=element_text(size=14,face="bold")) +
+  theme(
+    strip.background = element_blank(),
+    strip.text.x = element_blank()
+  )
+
+ref2_plot <- ggplot(TAS_NSW_median %>% 
+                      mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>% 
+                      filter(Location=="OTA")) + 
+  geom_boxplot(mapping=aes(x=mtDNA_clade, y=ref2)) +
+  geom_jitter(mapping=aes(x=mtDNA_clade, y=ref2), fill="white",shape=21, position=position_jitter(0.2),size=1) +
+  xlab("mtDNA clade") +
+  ylab("Prop. of SNPs matching Reference 2") +
+  theme_bw(base_size = 10) +
+  theme(legend.position="none",panel.border=element_rect(fill = NA)) +  
+  theme(axis.title=element_text(size=14,face="bold")) +
+  theme(
+    strip.background = element_blank(),
+    strip.text.x = element_blank()
+  )
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+# Binding all of the different outputs together for Kan vs NSW
+all_data <- full_join((Kan_Vert35$data %>% mutate(Het=ifelse(samples %in% c(KAN,"Vert35"),NA,Het),
+                                                  ref1=ifelse(samples %in% c(KAN,"Vert35"),NA,ref1),
+                                                  ref2=ifelse(samples %in% c(KAN,"Vert35"),NA,ref2))),
+                      (Kan_Vert36$data %>% mutate(Het=ifelse(samples %in% c(KAN,"Vert36"),NA,Het),
+                                                  ref1=ifelse(samples %in% c(KAN,"Vert36"),NA,ref1),
+                                                  ref2=ifelse(samples %in% c(KAN,"Vert36"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Kan_Vert37$data %>% mutate(Het=ifelse(samples %in% c(KAN,"Vert37"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(KAN,"Vert37"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(KAN,"Vert37"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Kan_Vert38$data %>% mutate(Het=ifelse(samples %in% c(KAN,"Vert38"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(KAN,"Vert38"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(KAN,"Vert38"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Kan_Vert39$data %>% mutate(Het=ifelse(samples %in% c(KAN,"Vert39"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(KAN,"Vert39"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(KAN,"Vert39"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Kan_Vert40$data %>% mutate(Het=ifelse(samples %in% c(KAN,"Vert40"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(KAN,"Vert40"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(KAN,"Vert40"),NA,ref2))),by="samples")
+
+all_data <- full_join(all_data,(Kan_Vert41$data %>% mutate(Het=ifelse(samples %in% c(KAN,"Vert41"),NA,Het),
+                                                           ref1=ifelse(samples %in% c(KAN,"Vert41"),NA,ref1),
+                                                           ref2=ifelse(samples %in% c(KAN,"Vert41"),NA,ref2))),by="samples")
+
+# Double checking the influence of specific reference choice on resultant heterozygosity
+# Overall, pretty good consistency no matter what reference is used
+# Some outliers, so we'll redo some previous analyses taking the median across the
+# different estimates of heterozygosity
+ggpairs(all_data %>% select(starts_with("Het")))
+
+# Probably very similar to last time based on number of outliers
+# In that median is likely to solved these problems
+
+# Doing a similar thing for ref.1
+ggpairs(all_data %>% select(starts_with("ref1")))
+ggpairs(all_data %>% select(starts_with("ref2")))
+
+# Kan_NSW median daKanet
+het_median <- rowMedians((all_data %>% select(starts_with("Het")) %>% as.matrix()),na.rm=TRUE)
+ref1_median <- rowMedians((all_data %>% select(starts_with("ref1")) %>% as.matrix()),na.rm=TRUE)
+ref2_median <- rowMedians((all_data %>% select(starts_with("ref2")) %>% as.matrix()),na.rm=TRUE)
+
+KAN_NSW_median <- cbind(all_data$samples, all_data$Location.x, all_data$mtDNA_clade.x, het_median,ref1_median, ref2_median)
+KAN_NSW_median <- gsub("NaN",NA,KAN_NSW_median)
+KAN_NSW_median <- as_tibble(KAN_NSW_median)
+names(KAN_NSW_median) <- c("samples","Location","mtDNA_clade","Het","ref1","ref2")
+KAN_NSW_median <- KAN_NSW_median %>% mutate_at(c('Het','ref1','ref2'),as.numeric)
+
+# T.test on Heterozygosity and ref1 proportion, and plotting of these values
+print("t-test on heterozygosity")
+ttest_het <- KAN_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% t_test(Het ~ mtDNA_clade, var.equal = T) %>%  print()
+
+mean_hets <- KAN_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% group_by(mtDNA_clade) %>% summarise(mean(Het, na.rm=TRUE)) %>% print()
+
+print("t-test on ref1 genomic proportion")
+ttest_ref1_prop <-  KAN_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% t_test(ref1 ~ mtDNA_clade, var.equal = T) %>%  print()
+
+mean_ref1_prop <- KAN_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% group_by(mtDNA_clade) %>% summarise(mean(ref1)) %>% print()
+
+print("t-test on ref2 genomic proportion")
+ttest_ref2_prop <-  KAN_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% t_test(ref2 ~ mtDNA_clade, var.equal = T) %>%  print()
+
+mean_ref2_prop <- KAN_NSW_median %>% 
+  mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>%
+  filter(Location=="OTA") %>% group_by(mtDNA_clade) %>% summarise(mean(ref2)) %>% print()
+
+het_plot <- ggplot(KAN_NSW_median %>% 
+                     mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>% 
+                     filter(Location=="OTA")) + 
+  geom_boxplot(mapping=aes(x=mtDNA_clade, y=Het)) +
+  geom_jitter(mapping=aes(x=mtDNA_clade, y=Het), fill="white",shape=21, position=position_jitter(0.2),size=1) +
+  xlab("mtDNA clade") +
+  ylab("Proportion of heterozygous SNP sites") +
+  theme_bw(base_size = 10) +
+  theme(legend.position="none",panel.border=element_rect(fill = NA)) +  
+  theme(axis.title=element_text(size=14,face="bold")) +
+  theme(
+    strip.background = element_blank(),
+    strip.text.x = element_blank()
+  )
+
+ref1_plot <- ggplot(KAN_NSW_median  %>% 
+                      mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>% 
+                      filter(Location=="OTA")) + 
+  geom_boxplot(mapping=aes(x=mtDNA_clade, y=ref1)) +
+  geom_jitter(mapping=aes(x=mtDNA_clade, y=ref1), fill="white",shape=21, position=position_jitter(0.2),size=1) +
+  xlab("mtDNA clade") +
+  ylab("Prop. of SNPs matching Reference 1") +
+  theme_bw(base_size = 10) +
+  theme(legend.position="none",panel.border=element_rect(fill = NA)) +  
+  theme(axis.title=element_text(size=14,face="bold")) +
+  theme(
+    strip.background = element_blank(),
+    strip.text.x = element_blank()
+  )
+
+ref2_plot <- ggplot(KAN_NSW_median %>% 
+                      mutate(Location=ifelse(Location=="SAN","OTA",Location)) %>% 
+                      filter(Location=="OTA")) + 
+  geom_boxplot(mapping=aes(x=mtDNA_clade, y=ref2)) +
+  geom_jitter(mapping=aes(x=mtDNA_clade, y=ref2), fill="white",shape=21, position=position_jitter(0.2),size=1) +
+  xlab("mtDNA clade") +
+  ylab("Prop. of SNPs matching Reference 2") +
+  theme_bw(base_size = 10) +
+  theme(legend.position="none",panel.border=element_rect(fill = NA)) +  
+  theme(axis.title=element_text(size=14,face="bold")) +
+  theme(
+    strip.background = element_blank(),
+    strip.text.x = element_blank()
+  )
+
+############### COMPARISON ACROSS REFERENCE COMBINATIONS #############
+between_ref_comp <- full_join(full_join(Kan_Tas$data,TAS_NSW_median,by=c("samples","mtDNA_clade","Location")),KAN_NSW_median,by=c("samples","mtDNA_clade","Location"))
+between_ref_comp$Het.x[1] <- NA 
+between_ref_comp$ref1.x[1] <- NA 
+between_ref_comp$ref2.x[1] <- NA 
+between_ref_comp$Het.x[which(between_ref_comp$samples==KAN)] <- NA
+between_ref_comp$ref1.x[which(between_ref_comp$samples==KAN)] <- NA
+between_ref_comp$ref2.x[which(between_ref_comp$samples==KAN)] <- NA
+
+names(between_ref_comp) <- c("samples","Het.KANTAS","ref1.KANTAS","ref2.KANTAS",
+                             "Location","Total","Code","mtDNA_clade","Het.TASNSW","ref1.TASNSW",
+"ref2.TASNSW","Het.KANNSW","ref1.KANNSW","ref2.KANNSW") 
+
+ggpairs(between_ref_comp %>% filter(Location %in% c("OTA","SAN")) %>% select(starts_with("Het")))
+# Heterozygosity: highly correlated between reference sample choices - regardless of specific
+# sites selected based on references, heterozygosity levels consistent
+
+# Ref1 and Ref2 proportion correlations are harder to interpret
+ggpairs(between_ref_comp %>% filter(Location %in% c("OTA","SAN")) %>% select(starts_with("ref1")))
+# Appears to be a higher correlation between genomic proportion of Tasmania and Kangaroo Island
+ggpairs(between_ref_comp %>% filter(Location %in% c("OTA","SAN")) %>% select(starts_with("ref2")))
+# Appears to be a higher correlation between genomic proportion fo Tasmania and NSW against Kangaroo Island
+
+# However, the take home is, each reference location comparison gives difference information, so 
+# by site comparisons should continue to explore reference combination.
