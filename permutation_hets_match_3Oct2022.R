@@ -1,0 +1,189 @@
+# Then in R in same directory
+setwd("/Users/aleal62p/Dropbox (Otago University)/Michael/vcfs")
+
+# Load library
+library(tidyverse)
+library(GGally)
+# install.packages("performance")
+# install.packages("see")
+library(performance)
+library(see)
+
+# https://statsandr.com/blog/multiple-linear-regression-made-simple/#conditions-of-application-1
+
+# Reading in file
+clades <- read_table("sample_mtDNA_clades_renamed.txt",col_names=TRUE)
+combined_TAS_Vert <- read_table("combined_match_mismatch.txt",col_names=TRUE)
+
+# We want to have our observations in rows, and our data in columns
+transposed_sites <- combined_TAS_Vert %>% select(-Sandyspleen) %>% select(-c(`#CHROM`:FORMAT)) %>% 
+  select(-c(Match:num_refs)) %>% t()
+
+transposed_sites_het_match <- as_tibble(gsub("Mismatch",1,gsub("Het",0,gsub("Match",0,transposed_sites))))
+transposed_sites_het_match <- transposed_sites_het_match %>% mutate_all(as.numeric)
+
+transposed_sites_het_match <- as_tibble(cbind(transposed_sites_het_match,rowMeans(transposed_sites_het_match,na.rm=TRUE)))
+names(transposed_sites_het_match)[dim(transposed_sites_het_match)[2]] <- "prop_mismatch"
+names(transposed_sites_het_match)[1:(dim(transposed_sites_het_match)[2]-1)] <- (combined_TAS_Vert %>% mutate(SNP_name=paste(`#CHROM`,POS,sep="_")) %>% select(SNP_name) %>% as.matrix())[,1]
+
+transposed_sites_het_match <- cbind((combined_TAS_Vert %>% select(c(-`#CHROM`:-FORMAT))  %>% select(-Sandyspleen)  %>% select(c(-Match:-num_refs)) %>% names()),transposed_sites_het_match)
+transposed_sites_het_match <- as_tibble(transposed_sites_het_match)
+names(transposed_sites_het_match)[1] <- "sample_id"
+
+mtDNA_clade <- NULL
+for (i in names(combined_TAS_Vert)[c(10:32,34:77)]) {
+  mtDNA_clade <- c(mtDNA_clade,clades$mtDNA_clade[which(clades$ID==i)])
+}
+
+# Blue as 0, Green as 1
+mtDNA_clade <- gsub("Green_TAS",1,gsub("Blue_NSW",0,mtDNA_clade))
+mtDNA_clade <- as.numeric(mtDNA_clade)
+transposed_sites_het_match <- as_tibble(cbind(transposed_sites_het_match,mtDNA_clade))
+
+# Calculating observed stats
+average_mismatch_NSW <- transposed_sites_het_match %>% filter(mtDNA_clade==0) %>% select(-sample_id) %>% colMeans(na.rm=TRUE)
+average_mismatch_TAS <- transposed_sites_het_match %>% filter(mtDNA_clade==1) %>% select(-sample_id) %>% colMeans(na.rm=TRUE)
+
+# Variable in both
+var_in_both <- c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]))[duplicated(c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))])))]
+var_in_both <- length(var_in_both[(!(var_in_both %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+
+# 61 variable in TAS, Matching in NSW
+var_in_TAS_match_in_NSW <- c(names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]),names(average_mismatch_NSW[which(average_mismatch_NSW==0)]))[duplicated(c(names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]),names(average_mismatch_NSW[which(average_mismatch_NSW==0)])))]
+var_in_TAS_match_in_NSW <- length(var_in_TAS_match_in_NSW[(!(var_in_TAS_match_in_NSW %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+
+# 13 variable in TAS, mismatching in NSW
+var_in_TAS_mismatch_in_NSW <- c(names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]),names(average_mismatch_NSW[which(average_mismatch_NSW==1)]))[duplicated(c(names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]),names(average_mismatch_NSW[which(average_mismatch_NSW==1)])))]
+var_in_TAS_mismatch_in_NSW <- length(var_in_TAS_mismatch_in_NSW[(!(var_in_TAS_mismatch_in_NSW %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+
+# 189 variable in NSW, Matching in TAS
+var_in_NSW_match_in_TAS <- c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(average_mismatch_TAS==0)]))[duplicated(c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(average_mismatch_TAS==0)])))]
+var_in_NSW_match_in_TAS <- length(var_in_NSW_match_in_TAS[(!(var_in_NSW_match_in_TAS %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+
+# 1 variable in NSW, Mismatching in TAS
+var_in_NSW_mismatch_in_TAS <- c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(average_mismatch_TAS==1)]))[duplicated(c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(average_mismatch_TAS==1)])))]
+var_in_NSW_mismatch_in_TAS <- length(var_in_NSW_mismatch_in_TAS[(!(var_in_NSW_mismatch_in_TAS %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+
+# 34 match in TAS, mismatch in NSW
+mismatch_in_NSW_match_in_TAS <- c(names(average_mismatch_TAS[which(average_mismatch_TAS==0)]),names(average_mismatch_NSW[which(average_mismatch_NSW==1)]))[duplicated(c(names(average_mismatch_TAS[which(average_mismatch_TAS==0)]),names(average_mismatch_NSW[which(average_mismatch_NSW==1)])))]
+mismatch_in_NSW_match_in_TAS <- length(mismatch_in_NSW_match_in_TAS[(!(mismatch_in_NSW_match_in_TAS %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+
+# 4 match in NSW, mismatch in TAS
+match_in_NSW_mismatch_in_TAS <- c(names(average_mismatch_TAS[which(average_mismatch_TAS==1)]),names(average_mismatch_NSW[which(average_mismatch_NSW==0)]))[duplicated(c(names(average_mismatch_TAS[which(average_mismatch_TAS==1)]),names(average_mismatch_NSW[which(average_mismatch_NSW==0)])))]
+match_in_NSW_mismatch_in_TAS <- length(match_in_NSW_mismatch_in_TAS[(!(match_in_NSW_mismatch_in_TAS %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+
+observed_results <- c(var_in_both,var_in_TAS_match_in_NSW,var_in_TAS_mismatch_in_NSW,var_in_NSW_match_in_TAS,var_in_NSW_mismatch_in_TAS,mismatch_in_NSW_match_in_TAS,match_in_NSW_mismatch_in_TAS)
+names(observed_results) <- c("var_in_both","var_in_TAS_match_in_NSW","var_in_TAS_mismatch_in_NSW","var_in_NSW_match_in_TAS","var_in_NSW_mismatch_in_TAS","mismatch_in_NSW_match_in_TAS","match_in_NSW_mismatch_in_TAS")
+
+no_permutations <- 100
+
+permuted_results <- matrix(NA,ncol=length(observed_results)+1,nrow=no_permutations)
+
+for (i in 1:no_permutations) {
+  print(paste("Up to permutation",i))
+  # 24 NSW (0)
+  # 43 TAS (1)
+  new_mtDNA <- rep(0,67)
+  new_mtDNA[sample(1:67,43,replace=FALSE)] <- 1
+  
+  temp <- cbind(transposed_sites_het_match,new_mtDNA)
+  
+  for (j in 1:dim(temp)[1]) {
+    if(temp$mtDNA_clade[j]!=temp$new_mtDNA[j]) {
+      temp[j,c(-(dim(temp)[2]-2):-(dim(temp)[2]))] <- gsub(2,1,gsub(1,0,gsub(0,2,temp[j,c(-(dim(temp)[2]-2):-(dim(temp)[2]))])))
+    }
+  }
+  
+  temp <- as_tibble(temp)
+  temp <- temp %>% mutate_all(as.numeric)
+  
+  # Calculating observed stats
+  average_mismatch_NSW <- temp %>% filter(new_mtDNA==0) %>% select(-sample_id) %>% colMeans(na.rm=TRUE)
+  average_mismatch_TAS <- temp %>% filter(new_mtDNA==1) %>% select(-sample_id) %>% colMeans(na.rm=TRUE)
+  
+  # Variable in both
+  var_in_both <- c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]))[duplicated(c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))])))]
+  var_in_both <- length(var_in_both[(!(var_in_both %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+  
+  # 61 variable in TAS, Matching in NSW
+  var_in_TAS_match_in_NSW <- c(names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]),names(average_mismatch_NSW[which(average_mismatch_NSW==0)]))[duplicated(c(names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]),names(average_mismatch_NSW[which(average_mismatch_NSW==0)])))]
+  var_in_TAS_match_in_NSW <- length(var_in_TAS_match_in_NSW[(!(var_in_TAS_match_in_NSW %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+  
+  # 13 variable in TAS, mismatching in NSW
+  var_in_TAS_mismatch_in_NSW <- c(names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]),names(average_mismatch_NSW[which(average_mismatch_NSW==1)]))[duplicated(c(names(average_mismatch_TAS[which(!(average_mismatch_TAS %in% c(0,1)))]),names(average_mismatch_NSW[which(average_mismatch_NSW==1)])))]
+  var_in_TAS_mismatch_in_NSW <- length(var_in_TAS_mismatch_in_NSW[(!(var_in_TAS_mismatch_in_NSW %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+  
+  # 189 variable in NSW, Matching in TAS
+  var_in_NSW_match_in_TAS <- c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(average_mismatch_TAS==0)]))[duplicated(c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(average_mismatch_TAS==0)])))]
+  var_in_NSW_match_in_TAS <- length(var_in_NSW_match_in_TAS[(!(var_in_NSW_match_in_TAS %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+  
+  # 1 variable in NSW, Mismatching in TAS
+  var_in_NSW_mismatch_in_TAS <- c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(average_mismatch_TAS==1)]))[duplicated(c(names(average_mismatch_NSW[which(!(average_mismatch_NSW %in% c(0,1)))]),names(average_mismatch_TAS[which(average_mismatch_TAS==1)])))]
+  var_in_NSW_mismatch_in_TAS <- length(var_in_NSW_mismatch_in_TAS[(!(var_in_NSW_mismatch_in_TAS %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+  
+  # 34 match in TAS, mismatch in NSW
+  mismatch_in_NSW_match_in_TAS <-c(names(average_mismatch_TAS[which(average_mismatch_TAS==0)]),names(average_mismatch_NSW[which(average_mismatch_NSW==1)]))[duplicated(c(names(average_mismatch_TAS[which(average_mismatch_TAS==0)]),names(average_mismatch_NSW[which(average_mismatch_NSW==1)])))]
+  mismatch_in_NSW_match_in_TAS <- length(mismatch_in_NSW_match_in_TAS[(!(mismatch_in_NSW_match_in_TAS %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+  
+  # 4 match in NSW, mismatch in TAS
+  match_in_NSW_mismatch_in_TAS <- c(names(average_mismatch_TAS[which(average_mismatch_TAS==1)]),names(average_mismatch_NSW[which(average_mismatch_NSW==0)]))[duplicated(c(names(average_mismatch_TAS[which(average_mismatch_TAS==1)]),names(average_mismatch_NSW[which(average_mismatch_NSW==0)])))]
+  match_in_NSW_mismatch_in_TAS <- length(match_in_NSW_mismatch_in_TAS[(!(match_in_NSW_mismatch_in_TAS %in% c("sample_id","prop_mismatch","mtDNA_clade")))])
+  
+  permuted_results[i,] <- c(i,var_in_both,var_in_TAS_match_in_NSW,var_in_TAS_mismatch_in_NSW,var_in_NSW_match_in_TAS,var_in_NSW_mismatch_in_TAS,mismatch_in_NSW_match_in_TAS,match_in_NSW_mismatch_in_TAS)
+}
+
+permuted_results <- as_tibble(permuted_results)
+names(permuted_results) <- c("perm","var_in_both","var_in_TAS_match_in_NSW","var_in_TAS_mismatch_in_NSW","var_in_NSW_match_in_TAS","var_in_NSW_mismatch_in_TAS","mismatch_in_NSW_match_in_TAS","match_in_NSW_mismatch_in_TAS")
+
+permuted_results <- permuted_results %>% mutate(var_in_TAS=var_in_both+var_in_TAS_match_in_NSW+var_in_TAS_mismatch_in_NSW,
+                           var_in_NSW=var_in_both+var_in_NSW_match_in_TAS+var_in_NSW_mismatch_in_TAS,
+                           match_in_TAS=var_in_NSW_match_in_TAS+mismatch_in_NSW_match_in_TAS,
+                           match_in_NSW=var_in_TAS_match_in_NSW+match_in_NSW_mismatch_in_TAS,
+                           mismatch_in_TAS=var_in_NSW_mismatch_in_TAS+match_in_NSW_mismatch_in_TAS,
+                           mismatch_in_NSW=var_in_TAS_mismatch_in_NSW,mismatch_in_NSW_match_in_TAS)
+
+by_mtDNA_haplotype <- permuted_results %>% select(var_in_TAS,match_in_TAS,mismatch_in_TAS,var_in_NSW,match_in_NSW,mismatch_in_NSW)
+by_mtDNA_haplotype <- pivot_longer(by_mtDNA_haplotype,cols=c(var_in_TAS,match_in_TAS,mismatch_in_TAS,var_in_NSW,match_in_NSW,mismatch_in_NSW),
+                                   names_to="category",values_to ="no_SNPs")
+
+observed_results_by_mtDNA <- as_tibble_row(observed_results)
+
+observed_results_by_mtDNA <- observed_results_by_mtDNA %>% mutate(var_in_TAS=var_in_both+var_in_TAS_match_in_NSW+var_in_TAS_mismatch_in_NSW,
+           var_in_NSW=var_in_both+var_in_NSW_match_in_TAS+var_in_NSW_mismatch_in_TAS,
+           match_in_TAS=var_in_NSW_match_in_TAS+mismatch_in_NSW_match_in_TAS,
+           match_in_NSW=var_in_TAS_match_in_NSW+match_in_NSW_mismatch_in_TAS,
+           mismatch_in_TAS=var_in_NSW_mismatch_in_TAS+match_in_NSW_mismatch_in_TAS,
+           mismatch_in_NSW=var_in_TAS_mismatch_in_NSW,mismatch_in_NSW_match_in_TAS) %>% 
+  select(var_in_TAS,match_in_TAS,mismatch_in_TAS,var_in_NSW,match_in_NSW,mismatch_in_NSW)
+
+observed_results_by_mtDNA <- pivot_longer(observed_results_by_mtDNA,cols=c(var_in_TAS,match_in_TAS,mismatch_in_TAS,var_in_NSW,match_in_NSW,mismatch_in_NSW),
+                                          names_to="category",values_to ="no_SNPs")
+
+# I think this is the clearest plot to present
+# Shows that we have higher "matchiness" than would be expected if
+# the match/mismatch patterns had no relationship to the mtDNA haplotype
+ggplot() + geom_point(by_mtDNA_haplotype,mapping=aes(x=category,y=no_SNPs)) +
+  geom_point(observed_results_by_mtDNA,mapping=aes(x=category,y=no_SNPs),color="red") +
+  theme(axis.text.x=element_text(angle = -90, hjust = 0)) +
+  scale_x_discrete(limits = c("match_in_NSW", "mismatch_in_NSW", "var_in_NSW","match_in_TAS","mismatch_in_TAS","var_in_TAS"))
+
+by_categories <- permuted_results %>% select(-var_in_TAS,-match_in_TAS,-mismatch_in_TAS,-var_in_NSW,-match_in_NSW,-mismatch_in_NSW) %>% 
+  pivot_longer(cols = c(var_in_both,var_in_TAS_match_in_NSW,var_in_TAS_mismatch_in_NSW,var_in_NSW_match_in_TAS,var_in_NSW_mismatch_in_TAS,mismatch_in_NSW_match_in_TAS,match_in_NSW_mismatch_in_TAS),
+             names_to="category",values_to ="no_SNPs")
+
+# I think these plots are less clear than "pooling" the overall "matchy" patterns above        
+observed_by_categories <- as_tibble_row(observed_results)  %>% 
+  pivot_longer(cols = c(var_in_both,var_in_TAS_match_in_NSW,var_in_TAS_mismatch_in_NSW,var_in_NSW_match_in_TAS,var_in_NSW_mismatch_in_TAS,mismatch_in_NSW_match_in_TAS,match_in_NSW_mismatch_in_TAS),
+               names_to="category",values_to ="no_SNPs")
+
+ggplot() + geom_point(by_categories,mapping=aes(x=category,y=no_SNPs)) +
+  geom_point(observed_by_categories,mapping=aes(x=category,y=no_SNPs),color="red") +
+  theme(axis.text.x=element_text(angle = -90, hjust = 0))
+
+# I drilled into the fixed differences on the match/mismatch and mismatch/match categories despite permuation
+# it turns out these are the sites that are 100% correlated with the mitochondrial haplotype, so when we
+# "change" the mitochondrial haplotype during permutation, we also have to "change" whether things match or not
+# so they still remain perfectly correlated and the number doesn't change
+
+
+
