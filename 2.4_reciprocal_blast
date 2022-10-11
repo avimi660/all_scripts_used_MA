@@ -1,11 +1,14 @@
 ```
-## created reciprocal blast script next to take the human gene name search for it in possum and then search for that back into humans to see if we get good matches completed multiple of these each using different output files from the blast script above. 
+## created reciprocal blast script next to take the human gene name search for it in possum and then search for that back into humans 
+## to see if we get good matches completed multiple of these each using different output files from the blast script above. 
 # multiple of these were created in order to use all the output files i had generated before 
 
 # Before you run all of this, need to make human genome blast-indexed
 # makeblastdb -in human_genome_name -dbtype nucl
 
-# Name of input files the name of the input file changed we had the original one here and then.                                                      # blast_gene_location_possum.txt,new_gene_name_location_possum.txt, new_blast_match_gene_location_possum.txt, manual_search_list_combined.txt - i   # ended up making a different script separately for each of these just copying and pasting the input name differently each time
+# Name of input files the name of the input file changed we had the original one here and then. 
+# ended up making a different script separately for each of these just copying and pasting the input name differently each time
+ ###  blast_gene_location_possum.txt,new_gene_name_location_possum.txt, new_blast_match_gene_location_possum.txt, manual_search_list_combined.txt   
 
 input_gene_location=gene_location_possum.txt
 genome_to_pull_fasta_from=GCF_011100635.1_mTriVul1.pri_genomic
