@@ -1,5 +1,3 @@
-# Then in R in same directory
-setwd("/Users/aleal62p/Dropbox (Otago University)/Michael/vcfs")
 
 # Load library
 library(tidyverse)
